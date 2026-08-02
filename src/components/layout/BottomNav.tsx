@@ -83,8 +83,25 @@ export function BottomNav() {
       }
     };
     fetchCounts();
-    const iv = setInterval(fetchCounts, 60_000);
-    return () => { mounted = false; clearInterval(iv); };
+    const iv = setInterval(fetchCounts, 15_000);
+
+    // Real-time subscription for instant badge updates
+    const sub = supabase
+      .channel(`bottomnav-notifs-${user.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${user.id}`,
+      }, () => { if (mounted) fetchCounts(); })
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'direct_messages',
+      }, () => { if (mounted) fetchCounts(); })
+      .subscribe();
+
+    return () => { mounted = false; clearInterval(iv); supabase.removeChannel(sub); };
   }, [user?.id]);
 
   // Clear notification badge when visiting /notifications or /fediverse

@@ -69,8 +69,26 @@ export function Sidebar() {
       }
     };
     fetchCounts();
-    const iv = setInterval(fetchCounts, 60_000);
-    return () => { mounted = false; clearInterval(iv); };
+    // Poll every 15s for near-real-time badges
+    const iv = setInterval(fetchCounts, 15_000);
+
+    // Real-time subscription for instant notification badge updates
+    const sub = supabase
+      .channel(`sidebar-notifs-${user.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${user.id}`,
+      }, () => { if (mounted) fetchCounts(); })
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'direct_messages',
+      }, () => { if (mounted) fetchCounts(); })
+      .subscribe();
+
+    return () => { mounted = false; clearInterval(iv); supabase.removeChannel(sub); };
   }, [user?.id]);
 
   // Clear badges when visiting relevant pages
