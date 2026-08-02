@@ -9,20 +9,18 @@ export default defineConfig({
     port: 8080,
   },
 
-  // Vite's built-in esbuild handles .tsx/.ts without @vitejs/plugin-react.
-  // jsx:'automatic' uses the React 17+ automatic runtime (no React import needed).
+  // Vite 5 + esbuild handles .tsx/.ts natively — no plugin needed.
+  // jsx:'automatic' enables React 17+ automatic JSX runtime.
   esbuild: {
     jsx: "automatic",
     jsxImportSource: "react",
   },
 
-  plugins: [],
-
   resolve: {
     alias: {
       "@": path.resolve("./src"),
 
-      // Platform-only packages → web-safe stub
+      // Native-only packages aliased to a web-safe stub
       "@capacitor/core":                         stub,
       "@capacitor/status-bar":                   stub,
       "@capacitor/app":                          stub,
