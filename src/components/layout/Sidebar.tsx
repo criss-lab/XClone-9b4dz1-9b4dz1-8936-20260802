@@ -6,7 +6,7 @@ import {
   TrendingUp, Sparkles, Bookmark, List, DollarSign, BarChart3,
   ShoppingBag, Calendar, Crown, Briefcase, Settings, HelpCircle,
   History, ChevronDown, ChevronUp, FileText, Wallet, Megaphone,
-  Shield, LineChart, Globe,
+  Shield, LineChart, Globe, Flame,
 } from 'lucide-react';
 import { authService } from '@/lib/auth';
 import { useState, useEffect } from 'react';
@@ -151,6 +151,7 @@ export function Sidebar() {
     { icon: Bookmark,   label: 'Bookmarks', path: '/bookmarks', requireAuth: true },
     { icon: List,       label: 'Lists',     path: '/lists',     requireAuth: true },
     { icon: History,    label: 'History',   path: '/history',   requireAuth: true },
+    { icon: Flame,      label: 'Daily Rewards', path: '/daily-rewards', requireAuth: true },
     { icon: Wallet,     label: 'Wallet',    path: '/wallet',    requireAuth: true },
     { icon: DollarSign, label: 'Payouts',   path: '/payouts',   requireAuth: true },
     { icon: Megaphone,  label: 'My Ads',    path: '/my-ads',    requireAuth: true },

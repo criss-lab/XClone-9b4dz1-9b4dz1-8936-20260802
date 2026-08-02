@@ -1,5 +1,19 @@
 import { defineConfig } from "vite";
 import path from "path";
+import { execSync } from "child_process";
+
+// ── Fix esbuild binary permissions before Vite processes anything ──────────
+// OnSpace's pre-check fork/exec's node_modules/.bin/esbuild.
+// bun installs the binary without the execute bit set.
+// Running chmod here ensures the bit is set by the time it's needed.
+try {
+  execSync(
+    "chmod +x node_modules/.bin/esbuild " +
+    "node_modules/esbuild/bin/esbuild " +
+    "node_modules/@esbuild/linux-x64/bin/esbuild 2>/dev/null || true",
+    { stdio: "ignore" }
+  );
+} catch (_) {}
 
 const stub = path.resolve("./src/lib/capacitor-stub.ts");
 
