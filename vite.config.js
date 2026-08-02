@@ -1,5 +1,4 @@
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
 import path from "path";
 
 const stub = path.resolve("./src/lib/capacitor-stub.ts");
@@ -10,7 +9,14 @@ export default defineConfig({
     port: 8080,
   },
 
-  plugins: [react()],
+  // Vite's built-in esbuild handles .tsx/.ts without @vitejs/plugin-react.
+  // jsx:'automatic' uses the React 17+ automatic runtime (no React import needed).
+  esbuild: {
+    jsx: "automatic",
+    jsxImportSource: "react",
+  },
+
+  plugins: [],
 
   resolve: {
     alias: {
