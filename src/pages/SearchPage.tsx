@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { TopBar } from '@/components/layout/TopBar';
 import { Input } from '@/components/ui/input';
-import { Search, Loader2, BadgeCheck, Globe, ExternalLink, UserPlus } from 'lucide-react';
+import { Search, Loader2, BadgeCheck, Globe, ExternalLink, UserPlus, Hash, Users } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { PostCard } from '@/components/features/PostCard';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import * as federation from '@/api/federation';
+import { formatNumber } from '@/lib/utils';
 
 export default function SearchPage() {
   const [searchParams] = useSearchParams();
@@ -17,11 +18,14 @@ export default function SearchPage() {
   const [activeTab, setActiveTab] = useState('Posts');
   const [posts, setPosts] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
+  const [hashtags, setHashtags] = useState<any[]>([]);
+  const [communities, setCommunities] = useState<any[]>([]);
   const [fediverseResults, setFediverseResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [fediverseLoading, setFediverseLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const tabs = ['Posts', 'Users', 'Fediverse'];
+  const tabs = ['Posts', 'Users', 'Hashtags', 'Communities', 'Fediverse'];
 
   useEffect(() => {
     const q = searchParams.get('q');
@@ -36,20 +40,36 @@ export default function SearchPage() {
     setLoading(true);
 
     try {
-      const { data: postsData } = await supabase
-        .from('posts')
-        .select('*, user_profiles (*)')
-        .or(`content.ilike.%${searchQuery}%`)
-        .order('created_at', { ascending: false })
-        .limit(50);
-      setPosts(postsData || []);
+      const [postsRes, usersRes, hashtagsRes, communitiesRes] = await Promise.all([
+        supabase
+          .from('posts')
+          .select('*, user_profiles (*)')
+          .ilike('content', `%${searchQuery}%`)
+          .order('created_at', { ascending: false })
+          .limit(50),
+        supabase
+          .from('user_profiles')
+          .select('*')
+          .or(`username.ilike.%${searchQuery}%,bio.ilike.%${searchQuery}%`)
+          .limit(20),
+        supabase
+          .from('hashtags')
+          .select('*')
+          .ilike('tag', `%${searchQuery.replace(/^#/, '')}%`)
+          .order('usage_count', { ascending: false })
+          .limit(20),
+        supabase
+          .from('communities')
+          .select('*')
+          .or(`name.ilike.%${searchQuery}%,display_name.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`)
+          .order('member_count', { ascending: false })
+          .limit(20),
+      ]);
 
-      const { data: usersData } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .or(`username.ilike.%${searchQuery}%,bio.ilike.%${searchQuery}%`)
-        .limit(20);
-      setUsers(usersData || []);
+      setPosts(postsRes.data || []);
+      setUsers(usersRes.data || []);
+      setHashtags(hashtagsRes.data || []);
+      setCommunities(communitiesRes.data || []);
 
       // ── Fediverse search ───────────────────────────────────────────
       setFediverseLoading(true);
@@ -130,8 +150,14 @@ export default function SearchPage() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) {
-      navigate(`/search?q=${encodeURIComponent(query.trim())}`);
+    if (query.trim()) navigate(`/search?q=${encodeURIComponent(query.trim())}`);
+  };
+
+  const handleQueryChange = (val: string) => {
+    setQuery(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (val.trim().length >= 2) {
+      debounceRef.current = setTimeout(() => performSearch(val.trim()), 300);
     }
   };
 
@@ -160,24 +186,26 @@ export default function SearchPage() {
               type="text"
               placeholder="Search posts, people, or @user@domain…"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => handleQueryChange(e.target.value)}
               className="pl-12 h-11 rounded-full bg-muted border-0 focus-visible:ring-2 focus-visible:ring-primary"
             />
           </div>
         </form>
 
-        <div className="flex">
+        <div className="flex overflow-x-auto scrollbar-hide">
           {tabs.map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-4 font-semibold transition-colors border-b-2 flex items-center justify-center gap-1.5 ${
+              className={`shrink-0 px-4 py-3.5 font-semibold transition-colors border-b-2 flex items-center gap-1.5 text-sm ${
                 activeTab === tab
                   ? 'border-primary text-foreground'
                   : 'border-transparent text-muted-foreground hover:bg-muted/50'
               }`}
             >
               {tab === 'Fediverse' && <Globe className="w-3.5 h-3.5" />}
+              {tab === 'Hashtags' && <Hash className="w-3.5 h-3.5" />}
+              {tab === 'Communities' && <Users className="w-3.5 h-3.5" />}
               {tab}
             </button>
           ))}
@@ -241,6 +269,70 @@ export default function SearchPage() {
               ) : (
                 <div className="text-center py-12 text-muted-foreground">
                   <p>No users found{query ? ` for "${query}"` : ''}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'Hashtags' && (
+            <div className="divide-y divide-border">
+              {hashtags.length > 0 ? (
+                hashtags.map((h) => (
+                  <button
+                    key={h.id}
+                    onClick={() => navigate(`/hashtag/${h.tag}`)}
+                    className="w-full flex items-center gap-4 p-4 hover:bg-muted/50 transition-colors text-left"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                      <Hash className="w-5 h-5 text-primary" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-primary">#{h.tag}</p>
+                      <p className="text-sm text-muted-foreground">{formatNumber(h.usage_count)} posts</p>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Hash className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p>No hashtags found{query ? ` for "${query}"` : ''}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'Communities' && (
+            <div className="divide-y divide-border">
+              {communities.length > 0 ? (
+                communities.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => navigate(`/c/${c.name}`)}
+                    className="w-full flex items-center gap-4 p-4 hover:bg-muted/50 transition-colors text-left"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-muted overflow-hidden shrink-0 flex items-center justify-center">
+                      {c.icon_url ? (
+                        <img src={c.icon_url} alt={c.display_name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-lg font-bold">{c.display_name[0]}</span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold">{c.display_name}</p>
+                      {c.description && (
+                        <p className="text-sm text-muted-foreground line-clamp-1">{c.description}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        <Users className="w-3 h-3 inline mr-1" />
+                        {formatNumber(c.member_count)} members
+                      </p>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p>No communities found{query ? ` for "${query}"` : ''}</p>
                 </div>
               )}
             </div>
