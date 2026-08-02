@@ -51,51 +51,76 @@ export default function SearchPage() {
         .limit(20);
       setUsers(usersData || []);
 
-      // Fediverse search
-      if (searchQuery.includes('@')) {
-        setFediverseLoading(true);
-        const cleaned = searchQuery.replace(/^@/, '');
+      // ── Fediverse search ───────────────────────────────────────────
+      setFediverseLoading(true);
+      const cleaned = searchQuery.replace(/^@/, '');
 
-        // Local cache lookup (optional)
-        try {
-          const { data: remoteData } = await supabase
-            .from('remote_accounts')
-            .select('*')
-            .or(`username.ilike.%${cleaned}%,domain.ilike.%${cleaned}%`)
-            .limit(20);
-          setFediverseResults(remoteData || []);
-        } catch (e) {
-          setFediverseResults([]);
-        }
-
-        // Live lookup against TestagramGateway (preferred)
-        if (cleaned.includes('@')) {
-          try {
-            const actor = await federation.getUser(cleaned);
-            if (actor) {
-              const account = {
-                actor_url: actor.id || actor.actor_url || cleaned,
-                username: actor.preferredUsername || cleaned.split('@')[0],
-                domain: cleaned.split('@')[1] || '',
-                display_name: actor.name || actor.preferredUsername,
-                bio: actor.summary,
-                avatar_url: actor.icon?.url || actor.avatar_url,
-                raw_actor: actor,
-              };
-              setFediverseResults((prev) => {
-                const exists = prev.some((r) => r.actor_url === account.actor_url);
-                return exists ? prev : [account, ...prev];
-              });
-            }
-          } catch (err) {
-            // ignore — gateway may not know the account
-          }
-        }
-
-        setFediverseLoading(false);
-      } else {
+      // 1. Check local remote_accounts cache
+      try {
+        const { data: remoteData } = await supabase
+          .from('remote_accounts')
+          .select('*')
+          .or(`username.ilike.%${cleaned}%,domain.ilike.%${cleaned}%,display_name.ilike.%${cleaned}%`)
+          .limit(20);
+        setFediverseResults(remoteData || []);
+      } catch {
         setFediverseResults([]);
       }
+
+      // 2. Gateway broad search for any query
+      try {
+        const gwResult: any = await federation.search(cleaned, 'users');
+        const accounts: any[] = Array.isArray(gwResult)
+          ? gwResult
+          : gwResult?.accounts ?? gwResult?.users ?? gwResult?.data ?? [];
+        if (accounts.length > 0) {
+          const mapped = accounts
+            .map((a: any) => ({
+              actor_url: a.url ?? a.id ?? a.actor_url ?? '',
+              username: a.username ?? a.preferredUsername ?? a.acct?.split('@')[0] ?? '',
+              domain:
+                a.acct?.split('@')[1] ??
+                a.domain ??
+                (a.url ? (() => { try { return new URL(a.url).hostname; } catch { return ''; } })() : ''),
+              display_name: a.display_name ?? a.name ?? a.username ?? '',
+              bio: a.note ?? a.summary ?? a.bio ?? '',
+              avatar_url: a.avatar ?? a.avatar_static ?? a.avatar_url ?? a.icon?.url ?? null,
+            }))
+            .filter((a: any) => a.username && a.actor_url);
+
+          setFediverseResults(prev => {
+            const existing = new Set(prev.map((r: any) => r.actor_url));
+            return [
+              ...prev,
+              ...mapped.filter((a: any) => !existing.has(a.actor_url)),
+            ];
+          });
+        }
+      } catch { /* gateway search unavailable */ }
+
+      // 3. Direct WebFinger lookup for @user@domain format
+      if (cleaned.includes('@')) {
+        try {
+          const actor = await federation.getUser(cleaned);
+          if (actor) {
+            const account = {
+              actor_url: actor.id || actor.actor_url || cleaned,
+              username: actor.preferredUsername || cleaned.split('@')[0],
+              domain: cleaned.split('@')[1] || '',
+              display_name: actor.name ?? actor.preferredUsername,
+              bio: actor.summary,
+              avatar_url: actor.icon?.url ?? actor.avatar_url,
+              raw_actor: actor,
+            };
+            setFediverseResults((prev) => {
+              const exists = prev.some((r) => r.actor_url === account.actor_url);
+              return exists ? prev : [account, ...prev];
+            });
+          }
+        } catch { /* WebFinger lookup failed */ }
+      }
+
+      setFediverseLoading(false);
     } catch (error) {
       console.error('Search error:', error);
     } finally {

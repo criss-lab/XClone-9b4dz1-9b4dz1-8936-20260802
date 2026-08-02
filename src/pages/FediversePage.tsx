@@ -23,6 +23,7 @@ export default function FediversePage() {
   const [following, setFollowing] = useState(false);
   const [remotePosts, setRemotePosts] = useState<any[]>([]);
   const [loadingFeed, setLoadingFeed] = useState(false);
+  const [cachedAt, setCachedAt] = useState<Date | null>(null);
   const [federatedFollowing, setFederatedFollowing] = useState<any[]>([]);
   const [federatedFollowers, setFederatedFollowers] = useState<any[]>([]);
   const [gatewayOk, setGatewayOk] = useState<boolean | null>(null);
@@ -70,19 +71,47 @@ export default function FediversePage() {
     setKeysReady(!!keys);
   };
 
+  const cacheFederatedPosts = async (posts: any[]) => {
+    const rows = posts
+      .filter((p: any) => p.uri ?? p.url ?? p.id)
+      .map((p: any) => ({
+        object_url: p.uri ?? p.url ?? p.id ?? '',
+        actor_url: p.actor?.id ?? p.actor?.url ?? p.account?.url ?? p.actor_url ?? '',
+        content: p.content ?? p.text ?? '',
+        summary: p.spoiler_text ?? p.summary ?? null,
+        media_urls: p.media_attachments ?? p.media_urls ?? [],
+        likes_count: p.favourites_count ?? p.likes_count ?? 0,
+        replies_count: p.replies_count ?? 0,
+        boosts_count: p.reblogs_count ?? p.boosts_count ?? 0,
+        published_at: p.created_at ?? p.published ?? new Date().toISOString(),
+        raw_object: p,
+      }))
+      .filter((r: any) => r.object_url);
+    if (!rows.length) return;
+    await supabase
+      .from('remote_posts')
+      .upsert(rows, { onConflict: 'object_url', ignoreDuplicates: false })
+      .then(() => setCachedAt(new Date()))
+      .catch(() => {});
+  };
+
   const fetchFederatedFeed = async () => {
     setLoadingFeed(true);
     try {
       const res: any = await federation.getFederatedTimeline({ limit: 30 });
       const posts = Array.isArray(res) ? res : res?.posts ?? res?.data ?? [];
       setRemotePosts(posts);
+      // Cache to DB in background
+      cacheFederatedPosts(posts).catch(() => {});
     } catch {
+      // Fallback to cached remote_posts
       const { data } = await supabase
         .from('remote_posts')
         .select('*, remote_accounts(username, domain, display_name, avatar_url)')
         .order('published_at', { ascending: false })
         .limit(30);
       setRemotePosts(data ?? []);
+      if ((data ?? []).length > 0) setCachedAt(new Date());
     } finally {
       setLoadingFeed(false);
     }
@@ -171,6 +200,32 @@ export default function FediversePage() {
     }
   };
 
+  const backfillAllKeys = async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const backendUrl = import.meta.env.VITE_SUPABASE_URL;
+      const res = await fetch(`${backendUrl}/functions/v1/activitypub-keygen`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ generate_all_missing: true }),
+      });
+      const data = await res.json();
+      if (data.status === 'backfill_complete') {
+        toast.success(
+          `Backfill done: ${data.generated} generated, ${data.failed} failed, ${data.remaining} remaining`
+        );
+      } else {
+        toast.error(data.error ?? 'Backfill failed');
+      }
+    } catch (err: any) {
+      toast.error('Backfill error: ' + err.message);
+    }
+  };
+
   const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: 'feed',     label: 'Federated Feed', icon: Rss      },
     { id: 'discover', label: 'Discover',        icon: Search   },
@@ -185,7 +240,7 @@ export default function FediversePage() {
       {gatewayOk === false && (
         <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          <span>TestagramGateway not connected. Add <code className="font-mono">VITE_GATEWAY_URL</code> to enable federation.</span>
+          <span>Gateway temporarily unreachable — serving federated content from local cache.</span>
         </div>
       )}
       {gatewayOk === true && (
@@ -218,6 +273,13 @@ export default function FediversePage() {
       {/* ── Federated Feed ── */}
       {tab === 'feed' && (
         <div>
+          {/* Cache status bar */}
+          {cachedAt && (
+            <div className="flex items-center gap-2 px-4 py-1.5 bg-muted/30 border-b border-border text-xs text-muted-foreground">
+              <CheckCircle className="w-3 h-3 text-green-500" />
+              Cached locally · last synced {formatDistanceToNow(cachedAt, { addSuffix: true })}
+            </div>
+          )}
           {loadingFeed ? (
             <div className="flex items-center justify-center py-16">
               <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -415,9 +477,26 @@ export default function FediversePage() {
                 </div>
                 {!gatewayOk && (
                   <p className="text-xs text-muted-foreground mt-2">
-                    Set <code className="font-mono">VITE_GATEWAY_URL</code> in <code>.env</code> pointing to your TestagramGateway deployment.
+                    Gateway is temporarily unreachable. Federation data is served from local cache. The hardcoded gateway URL is active — check gateway deployment status.
                   </p>
                 )}
+              </div>
+
+              {/* Backfill RSA Keys for all existing users */}
+              <div className="border border-amber-500/20 rounded-xl p-4 bg-amber-500/5">
+                <h3 className="font-semibold text-sm mb-1 text-amber-700 dark:text-amber-400">
+                  Backfill RSA Keys
+                </h3>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Generate ActivityPub RSA-2048 key pairs for all existing users who don’t have them yet.
+                  Run this once after deploying federation support.
+                </p>
+                <button
+                  onClick={backfillAllKeys}
+                  className="w-full py-2 bg-amber-600 text-white rounded-full text-sm font-medium hover:bg-amber-700 transition-colors"
+                >
+                  Backfill All Missing Keys (batch of 50)
+                </button>
               </div>
             </>
           )}
